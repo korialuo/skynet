@@ -202,6 +202,21 @@ skynet_memalign(size_t alignment, size_t size) {
 	return fill_prefix(ptr);
 }
 
+void *
+skynet_aligned_alloc(size_t alignment, size_t size) {
+	void* ptr = je_aligned_alloc(alignment, size + (size_t)((PREFIX_SIZE + alignment -1) & ~(alignment-1)));
+	if(!ptr) malloc_oom(size);
+	return fill_prefix(ptr);
+}
+
+int
+skynet_posix_memalign(void **memptr, size_t alignment, size_t size) {
+	int err = je_posix_memalign(memptr, alignment, size + PREFIX_SIZE);
+	if (err) malloc_oom(size);
+	fill_prefix(*memptr);
+	return err;
+}
+
 #else
 
 // for skynet_lalloc use
