@@ -48,7 +48,7 @@ CSERVICE = snlua logger gate harbor
 LUA_CLIB = skynet \
   client \
   bson md5 sproto lpeg \
-  cjson extlib
+  cjson lkcp extlib \
 
 LUA_CLIB_SKYNET = \
   lua-skynet.c lua-seri.c \
@@ -67,14 +67,13 @@ LUA_CLIB_SKYNET = \
   lua-debugchannel.c \
   lua-datasheet.c \
 
-  LUA_CLIB_EXTLIB = \
+LUA_CLIB_EXTLIB = \
   mt19937-64/mt19937-64.c \
   mt19937-64/lua-mt19937.c \
   skiplist/skiplist.c \
   skiplist/lua-skiplist.c \
   lua-snowflake.c \
   lua-webclient.c \
-
 
 
 SKYNET_SRC = skynet_main.c skynet_handle.c skynet_module.c skynet_mq.c \
@@ -121,11 +120,15 @@ $(LUA_CLIB_PATH)/sproto.so : lualib-src/sproto/sproto.c lualib-src/sproto/lsprot
 $(LUA_CLIB_PATH)/lpeg.so : 3rd/lpeg/lpcap.c 3rd/lpeg/lpcode.c 3rd/lpeg/lpprint.c 3rd/lpeg/lptree.c 3rd/lpeg/lpvm.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -I3rd/lpeg $^ -o $@ 
 
-$(LUA_CLIB_PATH)/cjson.so : 3rd/lua-cjson/fpconv.c 3rd/lua-cjson/strbuf.c 3rd/lua-cjson/lua_cjson.c
+$(LUA_CLIB_PATH)/cjson.so : 3rd/lua-cjson/fpconv.c 3rd/lua-cjson/strbuf.c 3rd/lua-cjson/lua_cjson.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -I3rd/lua-cjson
+
+$(LUA_CLIB_PATH)/lkcp.so : 3rd/kcp/ikcp.c lualib-src/lua-kcp.c | $(LUA_CLIB_PATH)
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -I3rd/kcp
 
 $(LUA_CLIB_PATH)/extlib.so : $(addprefix lualib-src/,$(LUA_CLIB_EXTLIB)) | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src -lcurl
+
 
 clean :
 	rm -f $(SKYNET_BUILD_PATH)/skynet $(CSERVICE_PATH)/*.so $(LUA_CLIB_PATH)/*.so

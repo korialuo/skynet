@@ -4,3 +4,6 @@
 [submodule "3rd/lua-cjson"]
 	path = 3rd/lua-cjson
 	url = https://github.com/korialuo/lua-cjson
+[submodule "3rd/kcp"]
+	path = 3rd/kcp
+	url = https://github.com/skywind3000/kcp
