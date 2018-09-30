@@ -1,7 +1,6 @@
 -- read https://github.com/cloudwu/skynet/wiki/FAQ for the module "skynet.core"
 local c = require "skynet.core"
 local tostring = tostring
-local tonumber = tonumber
 local coroutine = coroutine
 local assert = assert
 local pairs = pairs
@@ -12,6 +11,7 @@ local profile = require "skynet.profile"
 
 local cresume = profile.resume
 local running_thread = nil
+local init_thread = nil
 
 local function coroutine_resume(co, ...)
 	running_thread = co
@@ -68,9 +68,6 @@ local fork_queue = {}
 -- suspend is function
 local suspend
 
-local function string_to_handle(str)
-	return tonumber("0x" .. string.sub(str , 2))
-end
 
 ----- monitor exit
 
@@ -178,7 +175,7 @@ local function dispatch_wakeup()
 end
 
 -- suspend is local function
-function suspend(co, result, command, param, param2)
+function suspend(co, result, command)
 	if not result then
 		local session = session_coroutine_id[co]
 		if session then -- coroutine may fork by others (session is nil)
@@ -219,6 +216,7 @@ function skynet.timeout(ti, func)
 	local co = co_create(func)
 	assert(session_id_coroutine[session] == nil)
 	session_id_coroutine[session] = co
+	return co	-- for debug
 end
 
 local function suspend_sleep(session, token)
@@ -437,6 +435,12 @@ function skynet.ret(msg, sz)
 		return false
 	end
 	return ret
+end
+
+function skynet.context()
+	local co_session = session_coroutine_id[running_thread]
+	local co_address = session_coroutine_address[running_thread]
+	return co_session, co_address
 end
 
 function skynet.ignoreret()
@@ -764,8 +768,9 @@ end
 
 function skynet.start(start_func)
 	c.callback(skynet.dispatch_message)
-	skynet.timeout(0, function()
+	init_thread = skynet.timeout(0, function()
 		skynet.init_service(start_func)
+		init_thread = nil
 	end)
 end
 
@@ -782,14 +787,41 @@ function skynet.stat(what)
 end
 
 function skynet.task(ret)
-	local t = 0
-	for session,co in pairs(session_id_coroutine) do
-		if ret then
+	if ret == nil then
+		local t = 0
+		for session,co in pairs(session_id_coroutine) do
+			t = t + 1
+		end
+		return t
+	end
+	if ret == "init" then
+		if init_thread then
+			return debug.traceback(init_thread)
+		else
+			return
+		end
+	end
+	local tt = type(ret)
+	if tt == "table" then
+		for session,co in pairs(session_id_coroutine) do
 			ret[session] = debug.traceback(co)
 		end
-		t = t + 1
+		return
+	elseif tt == "number" then
+		local co = session_id_coroutine[ret]
+		if co then
+			return debug.traceback(co)
+		else
+			return "No session"
+		end
+	elseif tt == "thread" then
+		for session, co in pairs(session_id_coroutine) do
+			if co == ret then
+				return session
+			end
+		end
+		return
 	end
-	return t
 end
 
 function skynet.term(service)

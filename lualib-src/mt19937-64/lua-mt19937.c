@@ -5,6 +5,7 @@
 #include <lauxlib.h>
 #include "mt64.h"
 #include "spinlock.h"
+#include "skynet_malloc.h"
 
 static volatile int g_inited = 0;
 static struct spinlock sync_policy;
@@ -19,7 +20,7 @@ lmtinit(lua_State *L) {
     }
     int args = lua_gettop(L);
     if (args >= 1) {
-        uint64_t *array = (uint64_t *)malloc(sizeof(uint64_t) * args);
+        uint64_t *array = (uint64_t *)skynet_malloc(sizeof(uint64_t) * args);
         if (!array) {
             lua_pushboolean(L, 0);
             lua_pushstring(L, "init error, not enough memory.");
@@ -31,7 +32,7 @@ lmtinit(lua_State *L) {
             array[i] = luaL_checkinteger(L, i + 1);
         }
         init_by_array64(array, args);
-        free(array);
+        skynet_free(array);
     } else {
         spinlock_unlock(&sync_policy);
         return luaL_error(L, "mt19937.init need one or more seeds.");
