@@ -16,10 +16,11 @@
 #define KCP_MTU 1080
 
 struct kcpctx { 
-    int32_t conv;
-    int32_t ref;
-    ikcpcb  *kcp;
-    void    *ud;
+    int32_t     conv;
+    int32_t     ref;
+    uint32_t    timeout;
+    ikcpcb      *kcp;
+    void        *ud;
 };
 
 static int
@@ -45,9 +46,10 @@ lcreatekcp(lua_State *l) {
     ctx->ud = (void *)l;
     ctx->conv = (int32_t)conv;
     ctx->ref = ref;
+    ctx->timeout = 0;
     ctx->kcp = ikcp_create(conv, ctx);
     assert(ctx->kcp);
-    ikcp_nodelay(ctx->kcp, 0, 10, 0, 0);
+    ikcp_nodelay(ctx->kcp, 0, 40, 0, 0); // normal mode 
     ikcp_setoutput(ctx->kcp, udp_output);
 
     luaL_getmetatable(l, LKCP_MT);
@@ -68,6 +70,7 @@ ldestroykcp(lua_State *l) {
     ctx->ud = NULL;
     ctx->ref = 0;
     ctx->conv = 0;
+    ctx->timeout = 0;
 
     return 0;
 }
@@ -80,8 +83,10 @@ lupdatekcp(lua_State *l) {
     assert(ctx->kcp);
 
     uint32_t tick = (uint32_t)luaL_checkinteger(l, 2);
-    if (ikcp_check(ctx->kcp, tick) == tick)
+    if (tick >= ctx->timeout) {
         ikcp_update(ctx->kcp, tick);
+        ctx->timeout = ikcp_check(ctx->kcp, tick);
+    }
 
     return 0;
 }
@@ -125,9 +130,40 @@ lrecvkcp(lua_State *l) {
     return 2;
 }
 
+static int
+lnodelay(lua_State *l) {
+    struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
+    if (!ctx)
+        return luaL_argerror(l, 1, "parameter self invalid.");
+    assert(ctx->kcp);
+
+    int nodelay = (int)luaL_optinteger(l, 2, 0);
+    int interval = (int)luaL_optinteger(l, 3, 40);
+    int resend = (int)luaL_optinteger(l, 4, 0);
+    int nc = (int)luaL_optinteger(l, 5, 0);
+    ikcp_nodelay(ctx->kcp, nodelay, interval, resend, nc);
+    
+    return 0;
+}
+
+static int
+lwndsize(lua_State *l) {
+    struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
+    if (!ctx)
+        return luaL_argerror(l, 1, "parameter self invalid.");
+    assert(ctx->kcp);
+
+    int snd = (int)luaL_optinteger(l, 2, 32);
+    int rcv = (int)luaL_optinteger(l, 3, 32);
+    ikcp_wndsize(ctx->kcp, snd, rcv);
+
+    return 0;
+}
+
+
 LUAMOD_API int
-luaopen_lkcp(lua_State *L) {
-    luaL_checkversion(L);
+luaopen_lkcp(lua_State *l) {
+    luaL_checkversion(l);
     static int init = 0;
     if (!init) {
         init = 1;
@@ -144,16 +180,18 @@ luaopen_lkcp(lua_State *L) {
         {"update", lupdatekcp},
         {"send", lsendkcp},
         {"recv", lrecvkcp},
+        {"nodelay", lnodelay},
+        {"wndsize", lwndsize},
         {NULL, NULL},
     };
 
-    if (luaL_newmetatable(L, LKCP_MT)) {
-        lua_pushvalue(L, -1);
-        lua_setfield(L, -2, "__index");
-        luaL_setfuncs(L, lib2, 0);
-        lua_pop(L, 1);
+    if (luaL_newmetatable(l, LKCP_MT)) {
+        lua_pushvalue(l, -1);
+        lua_setfield(l, -2, "__index");
+        luaL_setfuncs(l, lib2, 0);
+        lua_pop(l, 1);
     }
 
-    luaL_newlib(L, lib);
+    luaL_newlib(l, lib);
     return 1;
 }
