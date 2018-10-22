@@ -15,7 +15,7 @@
 #define LKCP_MT ("com.korialuo.lkcp")
 #define KCP_MTU 1080
 
-struct kcpctx { 
+struct kcpctx {
     int32_t     conv;
     int32_t     ref;
     uint32_t    timeout;
@@ -38,7 +38,7 @@ udp_output(const char *buf, int len, ikcpcb *kcp, void *user) {
 }
 
 static int
-lcreatekcp(lua_State *l) {
+lcreate(lua_State *l) {
     lua_Integer conv = luaL_checkinteger(l, 1);
     int32_t ref = luaL_ref(l, LUA_REGISTRYINDEX);
     struct kcpctx *ctx = (struct kcpctx *)lua_newuserdata(l, sizeof(*ctx));
@@ -49,7 +49,7 @@ lcreatekcp(lua_State *l) {
     ctx->timeout = 0;
     ctx->kcp = ikcp_create(conv, ctx);
     assert(ctx->kcp);
-    ikcp_nodelay(ctx->kcp, 0, 40, 0, 0); // normal mode 
+    ikcp_nodelay(ctx->kcp, 0, 40, 0, 0); // normal mode
     ikcp_setoutput(ctx->kcp, udp_output);
 
     luaL_getmetatable(l, LKCP_MT);
@@ -59,7 +59,7 @@ lcreatekcp(lua_State *l) {
 }
 
 static int
-ldestroykcp(lua_State *l) {
+ldestroy(lua_State *l) {
     struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
     if (!ctx)
         return luaL_argerror(l, 1, "parameter self invalid.");
@@ -76,7 +76,7 @@ ldestroykcp(lua_State *l) {
 }
 
 static int
-lupdatekcp(lua_State *l) {
+lupdate(lua_State *l) {
     struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
     if (!ctx)
         return luaL_argerror(l, 1, "parameter self invalid.");
@@ -92,7 +92,7 @@ lupdatekcp(lua_State *l) {
 }
 
 static int
-lsendkcp(lua_State *l) {
+lsend(lua_State *l) {
     struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
     if (!ctx)
         return luaL_argerror(l, 1, "parameter self invalid.");
@@ -107,7 +107,24 @@ lsendkcp(lua_State *l) {
 }
 
 static int
-lrecvkcp(lua_State *l) {
+lrecv(lua_State *l) {
+    struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
+    if (!ctx)
+        return luaL_argerror(l, 1, "parameter self invalid.");
+    assert(ctx->kcp);
+
+    char recv_buf[KCP_MTU] = {0};
+    int n = ikcp_recv(ctx->kcp, recv_buf, KCP_MTU);
+    if (n < 0)
+        lua_pushnil(l);
+    else
+        lua_pushlstring(l, recv_buf, n);
+    lua_pushinteger(l, n);
+    return 2;
+}
+
+static int
+linput(lua_State *l) {
     struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
     if (!ctx)
         return luaL_argerror(l, 1, "parameter self invalid.");
@@ -116,18 +133,19 @@ lrecvkcp(lua_State *l) {
     size_t len;
     const char *buf = luaL_checklstring(l, 2, &len);
     int n = ikcp_input(ctx->kcp, buf, (long)len);
-    if (n < 0) {
-        lua_pushinteger(l, n);
-        return 1;
-    }
-
-    char recv_buf[KCP_MTU] = {0};
-    n = ikcp_recv(ctx->kcp, recv_buf, KCP_MTU);
     lua_pushinteger(l, n);
-    if (n < 0)
-        return 1;
-    lua_pushlstring(l, recv_buf, n);
-    return 2;
+    return 1;
+}
+
+static int
+lflush(lua_State *l) {
+    struct kcpctx *ctx = (struct kcpctx *)luaL_checkudata(l, 1, LKCP_MT);
+    if (!ctx)
+        return luaL_argerror(l, 1, "parameter self invalid.");
+    assert(ctx->kcp);
+
+    ikcp_flush(ctx->kcp);
+    return 0;
 }
 
 static int
@@ -142,7 +160,7 @@ lnodelay(lua_State *l) {
     int resend = (int)luaL_optinteger(l, 4, 0);
     int nc = (int)luaL_optinteger(l, 5, 0);
     ikcp_nodelay(ctx->kcp, nodelay, interval, resend, nc);
-    
+
     return 0;
 }
 
@@ -171,15 +189,17 @@ luaopen_lkcp(lua_State *l) {
     }
 
     luaL_Reg lib[] = {
-        {"create", lcreatekcp},
+        {"create", lcreate},
         {NULL, NULL},
     };
 
     luaL_Reg lib2[] = {
-        {"__gc", ldestroykcp},
-        {"update", lupdatekcp},
-        {"send", lsendkcp},
-        {"recv", lrecvkcp},
+        {"__gc", ldestroy},
+        {"update", lupdate},
+        {"send", lsend},
+        {"recv", lrecv},
+        {"input", linput},
+        {"flush", lflush},
         {"nodelay", lnodelay},
         {"wndsize", lwndsize},
         {NULL, NULL},
