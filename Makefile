@@ -39,8 +39,11 @@ $(JEMALLOC_STATICLIB) : 3rd/jemalloc/Makefile
 
 jemalloc : $(MALLOC_STATICLIB)
 
-update3rd :
-	rm -rf 3rd/jemalloc && git submodule update --init
+rm3rd :
+	rm -rf 3rd/jemalloc 3rd/lua-cjson 3rd/kcp
+
+update3rd : rm3rd
+	git submodule update --init
 
 # skynet
 
