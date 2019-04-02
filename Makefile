@@ -81,7 +81,6 @@ LUA_CLIB_EXTLIB = \
   skiplist/skiplist.c \
   skiplist/lua-skiplist.c \
   lua-snowflake.c \
-  lua-webclient.c \
 
 
 SKYNET_SRC = skynet_main.c skynet_handle.c skynet_module.c skynet_mq.c \
@@ -111,7 +110,7 @@ endef
 $(foreach v, $(CSERVICE), $(eval $(call CSERVICE_TEMP,$(v))))
 
 $(LUA_CLIB_PATH)/skynet.so : $(addprefix lualib-src/,$(LUA_CLIB_SKYNET)) | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src -lssl -lcrypto
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualibssl -lcrypto
 
 $(LUA_CLIB_PATH)/bson.so : lualib-src/lua-bson.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -Iskynet-src $^ -o $@ -Iskynet-src
@@ -138,7 +137,7 @@ $(LUA_CLIB_PATH)/lkcp.so : 3rd/kcp/ikcp.c lualib-src/lua-kcp.c | $(LUA_CLIB_PATH
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -I3rd/kcp
 
 $(LUA_CLIB_PATH)/extlib.so : $(addprefix lualib-src/,$(LUA_CLIB_EXTLIB)) | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src -lcurl
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src
 
 
 clean :

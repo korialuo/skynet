@@ -8,17 +8,16 @@ local handler = {}
 
 function handler.on_open(ws)
     skynet.error(string.format("Client connected: %s", ws.addr))
-    ws:send_text("Hello websocket !")
+    ws:writetext("Hello websocket !")
 end
 
-function handler.on_message(ws, msg)
+function handler.on_message(ws, msg, sz)
     skynet.error("Received a message from client:\n"..msg)
 end
 
 function handler.on_error(ws, msg)
     skynet.error("Error. Client may be force closed.")
-    -- do not need close.
-    -- ws:close()
+    ws:close()
 end
 
 function handler.on_close(ws, code, reason)
@@ -44,5 +43,4 @@ skynet.start(function()
         socket.start(fd)
         pcall(handle_socket, fd, addr)
     end)
-    skynet.newservice("debug_console", "0.0.0.0", 8000)
 end)
