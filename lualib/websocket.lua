@@ -9,6 +9,7 @@ local socket_close = socket.close
 local s_format = string.format
 local s_pack   = string.pack
 local s_unpack = string.unpack
+local s_match = string.match
 
 local t_pack   = table.pack
 local t_unpack = table.unpack
@@ -44,7 +45,7 @@ local function readframe(fd)
         if not data then return 'e', "Read extended payload len error." end
         len = s_unpack(">I8", data)
     end
-    data, err = socket_read(fd, (mask and 4 or me0) + len)
+    data, err = socket_read(fd, (mask and 4 or 0) + len)
     if not data then return 'e', "Read payload error." end
     
     if mask then
@@ -116,10 +117,7 @@ function websocket.upgrade(header, checkorigin, respcb)
     end
     local protocol = header['sec-websocket-protocol']
     if protocol then
-        for p in protocol:gmatch('(%a+),*') do
-            protocol = p
-            break
-        end
+        protocol = s_match(protocol, '([%a]+),*')
     end
     return true, respcb(upgrade_response(key, protocol))
 end
@@ -184,7 +182,7 @@ function websocket:on_ping(data, sz)
     end
 end
 
-function websocket:on_pong(ws, data, sz)
+function websocket:on_pong(data, sz)
     if self.handler and self.handler.on_pong then
         self.handler.on_pong(self, data, sz)
     end
@@ -199,13 +197,13 @@ end
 
 function websocket:on_message(data, sz)
     if self.handler and self.handler.on_message then
-        self.handler.on_message(ws, data, sz)
+        self.handler.on_message(self, data, sz)
     end
 end
 
 function websocket:on_error(err)
     if self.handler and self.handler.on_error then
-        self.handler.on_error(ws, err)
+        self.handler.on_error(self, err)
     end
 end
 
