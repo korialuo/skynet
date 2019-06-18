@@ -24,15 +24,26 @@ function handler.on_close(ws, code, reason)
     skynet.error(string.format("Client disconnected: %s", ws.addr))
     -- do not need close.
     -- ws:close
-end 
+end
+
+local function check_origin(origin, host)
+    return true
+end
+
+local function respcb(ret)
+
+end
 
 local function handle_socket(fd, addr)
     -- limit request body size to 8192 (you can pass nil to unlimit)
     local code, url, method, header, body = httpd.read_request(sockethelper.readfunc(fd), 8192)
     if code then
         if url == "/ws" then
-            local ws = websocket.new(fd, addr, header, handler)
-            ws:start()
+            if (not websocket.upgrade(header, check_origin, function(resp) socket.write(fd, resp) end)) then
+	        socket.close(fd)
+		return
+            end
+            local ws = websocket.new(fd, addr, handler, nil)
         end
     end
 end
