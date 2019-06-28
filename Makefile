@@ -74,8 +74,7 @@ LUA_CLIB_SKYNET = \
   lua-stm.c \
   lua-debugchannel.c \
   lua-datasheet.c \
-  lua-ssm.c \
-  lua-sharetable.c
+  lua-sharetable.c \
 
 LUA_CLIB_EXTLIB = \
   mt19937-64/mt19937-64.c \
@@ -83,6 +82,7 @@ LUA_CLIB_EXTLIB = \
   skiplist/skiplist.c \
   skiplist/lua-skiplist.c \
   lua-snowflake.c \
+  \
 
 SKYNET_SRC = skynet_main.c skynet_handle.c skynet_module.c skynet_mq.c \
   skynet_server.c skynet_start.c skynet_timer.c skynet_error.c \
