@@ -95,8 +95,8 @@ local function writeframe(fd, op, fin, data, sz, mask)
         frame = frame..s_pack(">I4", mask) 
         payload = crypt.xor_str(data, s_pack(">I4", mask)) 
     end
-    socket_write(self.fd, frame)
-    socket_write(self.fd, payload, sz)
+    socket_write(fd, frame)
+    socket_write(fd, payload, sz)
 end
 
 local websocket = {}
