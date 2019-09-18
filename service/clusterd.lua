@@ -50,6 +50,8 @@ local function open_channel(t, key)
 		if succ then
 			t[key] = c
 			ct.channel = c
+		else
+			err = string.format("changenode [%s] (%s:%s) failed", key, host, port)
 		end
 	else
 		err = string.format("cluster node [%s] is %s.", key,  address == false and "down" or "absent")
@@ -59,6 +61,9 @@ local function open_channel(t, key)
 		skynet.wakeup(co)
 	end
 	assert(succ, err)
+	if node_address[key] ~= address then
+		return open_channel(t,key)
+	end
 	return c
 end
 
@@ -74,6 +79,7 @@ local function loadconfig(tmp)
 			assert(load(source, "@"..config_name, "t", tmp))()
 		end
 	end
+	local reload = {}
 	for name,address in pairs(tmp) do
 		if name:sub(1,2) == "__" then
 			name = name:sub(3)
@@ -85,6 +91,7 @@ local function loadconfig(tmp)
 				-- address changed
 				if rawget(node_channel, name) then
 					node_channel[name] = nil	-- reset connection
+					table.insert(reload, name)
 				end
 				node_address[name] = address
 			end
@@ -102,6 +109,10 @@ local function loadconfig(tmp)
 				skynet.wakeup(ct.namequery)
 			end
 		end
+	end
+	for _, name in ipairs(reload) do
+		-- open_channel would block
+		skynet.fork(open_channel, node_channel, name)
 	end
 end
 
