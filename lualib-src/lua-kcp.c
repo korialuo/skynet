@@ -7,6 +7,7 @@
 
 #include <lua.h>
 #include <lauxlib.h>
+#include <stdint.h>
 #include <assert.h>
 
 #include "ikcp.h"
