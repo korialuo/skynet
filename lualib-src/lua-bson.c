@@ -1245,11 +1245,11 @@ typeclosure(lua_State *L) {
 }
 
 static uint8_t oid_header[5];
-static uint32_t oid_counter;
+static ATOM_ULONG oid_counter;
 
 static void
 init_oid_header() {
-	if (oid_counter) {
+	if (ATOM_LOAD(&oid_counter)) {
 		// already init
 		return;
 	}
@@ -1269,11 +1269,11 @@ init_oid_header() {
 	oid_header[3] = pid & 0xff;
 	oid_header[4] = (pid >> 8) & 0xff;
 	
-	uint32_t c = h ^ time(NULL) ^ (uintptr_t)&h;
+	unsigned long c = h ^ time(NULL) ^ (uintptr_t)&h;
 	if (c == 0) {
 		c = 1;
 	}
-	oid_counter = c;
+	ATOM_STORE(&oid_counter, c);
 }
 
 static inline int

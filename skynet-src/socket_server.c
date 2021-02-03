@@ -29,9 +29,10 @@
 #define SOCKET_TYPE_LISTEN 3
 #define SOCKET_TYPE_CONNECTING 4
 #define SOCKET_TYPE_CONNECTED 5
-#define SOCKET_TYPE_HALFCLOSE 6
-#define SOCKET_TYPE_PACCEPT 7
-#define SOCKET_TYPE_BIND 8
+#define SOCKET_TYPE_HALFCLOSE_READ 6
+#define SOCKET_TYPE_HALFCLOSE_WRITE 7
+#define SOCKET_TYPE_PACCEPT 8
+#define SOCKET_TYPE_BIND 9
 
 #define MAX_SOCKET (1<<MAX_SOCKET_P)
 
@@ -91,14 +92,15 @@ struct socket {
 	struct wb_list low;
 	int64_t wb_size;
 	struct socket_stat stat;
-	volatile uint32_t sending;
+	ATOM_ULONG sending;
 	int fd;
 	int id;
+	ATOM_INT type;
 	uint8_t protocol;
-	uint8_t type;
 	bool reading;
 	bool writing;
-	int udpconnecting;
+	bool closing;
+	ATOM_INT udpconnecting;
 	int64_t warn_size;
 	union {
 		int size;
@@ -116,7 +118,7 @@ struct socket_server {
 	int sendctrl_fd;
 	int checkctrl;
 	poll_fd event_fd;
-	int alloc_id;
+	ATOM_INT alloc_id;
 	int event_n;
 	int event_index;
 	struct socket_object_interface soi;
@@ -276,6 +278,11 @@ socket_unlock(struct socket_lock *sl) {
 	}
 }
 
+static inline int
+socket_invalid(struct socket *s, int id) {
+	return (s->id != id || ATOM_LOAD(&s->type) == SOCKET_TYPE_INVALID);
+}
+
 static inline bool
 send_object_init(struct socket_server *ss, struct send_object *so, const void *object, size_t sz) {
 	if (sz == USEROBJECT) {
@@ -339,18 +346,19 @@ static int
 reserve_id(struct socket_server *ss) {
 	int i;
 	for (i=0;i<MAX_SOCKET;i++) {
-		int id = ATOM_INC(&(ss->alloc_id));
+		int id = ATOM_FINC(&(ss->alloc_id))+1;
 		if (id < 0) {
-			id = ATOM_AND(&(ss->alloc_id), 0x7fffffff);
+			id = ATOM_FAND(&(ss->alloc_id), 0x7fffffff) & 0x7fffffff;
 		}
 		struct socket *s = &ss->slot[HASH_ID(id)];
-		if (s->type == SOCKET_TYPE_INVALID) {
-			if (ATOM_CAS(&s->type, SOCKET_TYPE_INVALID, SOCKET_TYPE_RESERVE)) {
+		int type_invalid = ATOM_LOAD(&s->type);
+		if (type_invalid == SOCKET_TYPE_INVALID) {
+			if (ATOM_CAS(&s->type, type_invalid, SOCKET_TYPE_RESERVE)) {
 				s->id = id;
 				s->protocol = PROTOCOL_UNKNOWN;
 				// socket_server_udp_connect may inc s->udpconncting directly (from other thread, before new_fd), 
 				// so reset it to 0 here rather than in new_fd.
-				s->udpconnecting = 0;
+				ATOM_INIT(&s->udpconnecting, 0);
 				s->fd = -1;
 				return id;
 			} else {
@@ -400,12 +408,12 @@ socket_server_create(uint64_t time) {
 
 	for (i=0;i<MAX_SOCKET;i++) {
 		struct socket *s = &ss->slot[i];
-		s->type = SOCKET_TYPE_INVALID;
+		ATOM_INIT(&s->type, SOCKET_TYPE_INVALID);
 		clear_wb_list(&s->high);
 		clear_wb_list(&s->low);
 		spinlock_init(&s->dw_lock);
 	}
-	ss->alloc_id = 0;
+	ATOM_INIT(&ss->alloc_id , 0);
 	ss->event_n = 0;
 	ss->event_index = 0;
 	memset(&ss->soi, 0, sizeof(ss->soi));
@@ -474,20 +482,21 @@ force_close(struct socket_server *ss, struct socket *s, struct socket_lock *l, s
 	result->ud = 0;
 	result->data = NULL;
 	result->opaque = s->opaque;
-	if (s->type == SOCKET_TYPE_INVALID) {
+	uint8_t type = ATOM_LOAD(&s->type);
+	if (type == SOCKET_TYPE_INVALID) {
 		return;
 	}
-	assert(s->type != SOCKET_TYPE_RESERVE);
+	assert(type != SOCKET_TYPE_RESERVE);
 	free_wb_list(ss,&s->high);
 	free_wb_list(ss,&s->low);
 	sp_del(ss->event_fd, s->fd);
 	socket_lock(l);
-	if (s->type != SOCKET_TYPE_BIND) {
+	if (type != SOCKET_TYPE_BIND) {
 		if (close(s->fd) < 0) {
 			perror("close socket:");
 		}
 	}
-	s->type = SOCKET_TYPE_INVALID;
+	ATOM_STORE(&s->type, SOCKET_TYPE_INVALID);
 	if (s->dw_buffer) {
 		struct socket_sendbuffer tmp;
 		tmp.buffer = s->dw_buffer;
@@ -508,7 +517,7 @@ socket_server_release(struct socket_server *ss) {
 		struct socket *s = &ss->slot[i];
 		struct socket_lock l;
 		socket_lock_init(s, &l);
-		if (s->type != SOCKET_TYPE_RESERVE) {
+		if (ATOM_LOAD(&s->type) != SOCKET_TYPE_RESERVE) {
 			force_close(ss, s, &l, &dummy);
 		}
 		spinlock_destroy(&s->dw_lock);
@@ -546,10 +555,10 @@ enable_read(struct socket_server *ss, struct socket *s, bool enable) {
 static struct socket *
 new_fd(struct socket_server *ss, int id, int fd, int protocol, uintptr_t opaque, bool reading) {
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	assert(s->type == SOCKET_TYPE_RESERVE);
+	assert(ATOM_LOAD(&s->type) == SOCKET_TYPE_RESERVE);
 
 	if (sp_add(ss->event_fd, fd, s)) {
-		s->type = SOCKET_TYPE_INVALID;
+		ATOM_STORE(&s->type, SOCKET_TYPE_INVALID);
 		return NULL;
 	}
 
@@ -557,7 +566,8 @@ new_fd(struct socket_server *ss, int id, int fd, int protocol, uintptr_t opaque,
 	s->fd = fd;
 	s->reading = true;
 	s->writing = false;
-	s->sending = ID_TAG16(id) << 16 | 0;
+	s->closing = false;
+	ATOM_INIT(&s->sending , ID_TAG16(id) << 16 | 0);
 	s->protocol = protocol;
 	s->p.size = MIN_READ_BUFFER;
 	s->opaque = opaque;
@@ -569,7 +579,7 @@ new_fd(struct socket_server *ss, int id, int fd, int protocol, uintptr_t opaque,
 	s->dw_size = 0;
 	memset(&s->stat, 0, sizeof(s->stat));
 	if (enable_read(ss, s, reading)) {
-		s->type = SOCKET_TYPE_INVALID;
+		ATOM_STORE(&s->type , SOCKET_TYPE_INVALID);
 		return NULL;
 	}
 	return s;
@@ -642,7 +652,7 @@ open_socket(struct socket_server *ss, struct request_open * request, struct sock
 	}
 
 	if(status == 0) {
-		ns->type = SOCKET_TYPE_CONNECTED;
+		ATOM_STORE(&ns->type , SOCKET_TYPE_CONNECTED);
 		struct sockaddr * addr = ai_ptr->ai_addr;
 		void * sin_addr = (ai_ptr->ai_family == AF_INET) ? (void*)&((struct sockaddr_in *)addr)->sin_addr : (void*)&((struct sockaddr_in6 *)addr)->sin6_addr;
 		if (inet_ntop(ai_ptr->ai_family, sin_addr, ss->buffer, sizeof(ss->buffer))) {
@@ -651,7 +661,7 @@ open_socket(struct socket_server *ss, struct request_open * request, struct sock
 		freeaddrinfo( ai_list );
 		return SOCKET_OPEN;
 	} else {
-		ns->type = SOCKET_TYPE_CONNECTING;
+		ATOM_STORE(&ns->type , SOCKET_TYPE_CONNECTING);
 		if (enable_write(ss, ns, true)) {
 			result->data = "enable write failed";
 			goto _failed;
@@ -668,6 +678,17 @@ _failed_getaddrinfo:
 }
 
 static int
+close_write(struct socket_server *ss, struct socket *s, struct socket_lock *l, struct socket_message *result) {
+	if (ATOM_LOAD(&s->type) == SOCKET_TYPE_HALFCLOSE_READ) {
+		force_close(ss,s,l,result);
+		return SOCKET_CLOSE;
+	} else {
+		ATOM_STORE(&s->type, SOCKET_TYPE_HALFCLOSE_WRITE);
+		return -1;
+	}
+}
+
+static int
 send_list_tcp(struct socket_server *ss, struct socket *s, struct wb_list *list, struct socket_lock *l, struct socket_message *result) {
 	while (list->head) {
 		struct write_buffer * tmp = list->head;
@@ -680,8 +701,7 @@ send_list_tcp(struct socket_server *ss, struct socket *s, struct wb_list *list, 
 				case AGAIN_WOULDBLOCK:
 					return -1;
 				}
-				force_close(ss,s,l,result);
-				return SOCKET_CLOSE;
+				return close_write(ss, s, l, result);
 			}
 			stat_write(ss,s,(int)sz);
 			s->wb_size -= sz;
@@ -820,11 +840,17 @@ send_buffer_(struct socket_server *ss, struct socket *s, struct socket_lock *l, 
 	if (send_list(ss,s,&s->high,l,result) == SOCKET_CLOSE) {
 		return SOCKET_CLOSE;
 	}
+	if (ATOM_LOAD(&s->type) == SOCKET_TYPE_HALFCLOSE_WRITE) {
+		return -1;
+	}
 	if (s->high.head == NULL) {
 		// step 2
 		if (s->low.head != NULL) {
 			if (send_list(ss,s,&s->low,l,result) == SOCKET_CLOSE) {
 				return SOCKET_CLOSE;
+			}
+			if (ATOM_LOAD(&s->type) == SOCKET_TYPE_HALFCLOSE_WRITE) {
+				return -1;
 			}
 			// step 3
 			if (list_uncomplete(&s->low)) {
@@ -836,12 +862,13 @@ send_buffer_(struct socket_server *ss, struct socket *s, struct socket_lock *l, 
 		} 
 		// step 4
 		assert(send_buffer_empty(s) && s->wb_size == 0);
-		int err = enable_write(ss, s, false);
 
-		if (s->type == SOCKET_TYPE_HALFCLOSE) {
-				force_close(ss, s, l, result);
-				return SOCKET_CLOSE;
+		if (s->closing) {
+			force_close(ss, s, l, result);
+			return SOCKET_CLOSE;
 		}
+
+		int err = enable_write(ss, s, false);
 
 		if (err) {
 			result->opaque = s->opaque;
@@ -852,12 +879,12 @@ send_buffer_(struct socket_server *ss, struct socket *s, struct socket_lock *l, 
 		}
 
 		if(s->warn_size > 0){
-				s->warn_size = 0;
-				result->opaque = s->opaque;
-				result->id = s->id;
-				result->ud = 0;
-				result->data = NULL;
-				return SOCKET_WARNING;
+			s->warn_size = 0;
+			result->opaque = s->opaque;
+			result->id = s->id;
+			result->ud = 0;
+			result->data = NULL;
+			return SOCKET_WARNING;
 		}
 	}
 
@@ -936,7 +963,7 @@ static int
 trigger_write(struct socket_server *ss, struct request_send * request, struct socket_message *result) {
 	int id = request->id;
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	if (s->type == SOCKET_TYPE_INVALID || s->id != id)
+	if (socket_invalid(s, id))
 		return -1;
 	if (enable_write(ss, s, true)) {
 		result->opaque = s->opaque;
@@ -961,18 +988,20 @@ send_socket(struct socket_server *ss, struct request_send * request, struct sock
 	struct socket * s = &ss->slot[HASH_ID(id)];
 	struct send_object so;
 	send_object_init(ss, &so, request->buffer, request->sz);
-	if (s->type == SOCKET_TYPE_INVALID || s->id != id 
-		|| s->type == SOCKET_TYPE_HALFCLOSE
-		|| s->type == SOCKET_TYPE_PACCEPT) {
+	uint8_t type = ATOM_LOAD(&s->type);
+	if (type == SOCKET_TYPE_INVALID || s->id != id
+		|| type == SOCKET_TYPE_HALFCLOSE_WRITE
+		|| type == SOCKET_TYPE_PACCEPT
+		|| s->closing) {
 		so.free_func((void *)request->buffer);
 		return -1;
 	}
-	if (s->type == SOCKET_TYPE_PLISTEN || s->type == SOCKET_TYPE_LISTEN) {
+	if (type == SOCKET_TYPE_PLISTEN || type == SOCKET_TYPE_LISTEN) {
 		skynet_error(NULL, "socket-server: write to listen fd %d.", id);
 		so.free_func((void *)request->buffer);
 		return -1;
 	}
-	if (send_buffer_empty(s) && s->type == SOCKET_TYPE_CONNECTED) {
+	if (send_buffer_empty(s) && type == SOCKET_TYPE_CONNECTED) {
 		if (s->protocol == PROTOCOL_TCP) {
 			append_sendbuffer(ss, s, request);	// add to high priority list, even priority == PRIORITY_LOW
 		} else {
@@ -984,7 +1013,7 @@ send_socket(struct socket_server *ss, struct request_send * request, struct sock
 			socklen_t sasz = udp_socket_address(s, udp_address, &sa);
 			if (sasz == 0) {
 				// udp type mismatch, just drop it.
-				skynet_error(NULL, "socket-server: udp socket (%d) type mistach.", id);
+				skynet_error(NULL, "socket-server: udp socket (%d) type mismatch.", id);
 				so.free_func((void *)request->buffer);
 				return -1;
 			}
@@ -1037,7 +1066,7 @@ listen_socket(struct socket_server *ss, struct request_listen * request, struct 
 	if (s == NULL) {
 		goto _failed;
 	}
-	s->type = SOCKET_TYPE_PLISTEN;
+	ATOM_STORE(&s->type , SOCKET_TYPE_PLISTEN);
 	return -1;
 _failed:
 	close(listen_fd);
@@ -1052,14 +1081,15 @@ _failed:
 
 static inline int
 nomore_sending_data(struct socket *s) {
-	return send_buffer_empty(s) && s->dw_buffer == NULL && (s->sending & 0xffff) == 0;
+	return (send_buffer_empty(s) && s->dw_buffer == NULL && (ATOM_LOAD(&s->sending) & 0xffff) == 0)
+		|| (ATOM_LOAD(&s->type) == SOCKET_TYPE_HALFCLOSE_WRITE);
 }
 
 static int
 close_socket(struct socket_server *ss, struct request_close *request, struct socket_message *result) {
 	int id = request->id;
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	if (s->type == SOCKET_TYPE_INVALID || s->id != id) {
+	if (socket_invalid(s, id)) {
 		result->id = id;
 		result->opaque = request->opaque;
 		result->ud = 0;
@@ -1068,20 +1098,15 @@ close_socket(struct socket_server *ss, struct request_close *request, struct soc
 	}
 	struct socket_lock l;
 	socket_lock_init(s, &l);
-	if (!nomore_sending_data(s)) {
-		enable_read(ss,s,true);
-		int type = send_buffer(ss,s,&l,result);
-		// type : -1 or SOCKET_WARNING or SOCKET_CLOSE, SOCKET_WARNING means nomore_sending_data
-		if (type != -1 && type != SOCKET_WARNING)
-			return type;
-	}
+
 	if (request->shutdown || nomore_sending_data(s)) {
 		force_close(ss,s,&l,result);
-		result->id = id;
-		result->opaque = request->opaque;
 		return SOCKET_CLOSE;
 	}
-	s->type = SOCKET_TYPE_HALFCLOSE;
+
+	ATOM_STORE(&s->type , SOCKET_TYPE_HALFCLOSE_READ);
+	s->closing = true;
+	enable_read(ss,s,true);
 	shutdown(s->fd, SHUT_RD);
 
 	return -1;
@@ -1099,7 +1124,7 @@ bind_socket(struct socket_server *ss, struct request_bind *request, struct socke
 		return SOCKET_ERR;
 	}
 	sp_nonblocking(request->fd);
-	s->type = SOCKET_TYPE_BIND;
+	ATOM_STORE(&s->type , SOCKET_TYPE_BIND);
 	result->data = "binding";
 	return SOCKET_OPEN;
 }
@@ -1112,7 +1137,7 @@ resume_socket(struct socket_server *ss, struct request_resumepause *request, str
 	result->ud = 0;
 	result->data = NULL;
 	struct socket *s = &ss->slot[HASH_ID(id)];
-	if (s->type == SOCKET_TYPE_INVALID || s->id !=id) {
+	if (socket_invalid(s, id)) {
 		result->data = "invalid socket";
 		return SOCKET_ERR;
 	}
@@ -1122,18 +1147,19 @@ resume_socket(struct socket_server *ss, struct request_resumepause *request, str
 		result->data = "enable read failed";
 		return SOCKET_ERR;
 	}
-	if (s->type == SOCKET_TYPE_PACCEPT || s->type == SOCKET_TYPE_PLISTEN) {
-		s->type = (s->type == SOCKET_TYPE_PACCEPT) ? SOCKET_TYPE_CONNECTED : SOCKET_TYPE_LISTEN;
+	uint8_t type = ATOM_LOAD(&s->type);
+	if (type == SOCKET_TYPE_PACCEPT || type == SOCKET_TYPE_PLISTEN) {
+		ATOM_STORE(&s->type , (type == SOCKET_TYPE_PACCEPT) ? SOCKET_TYPE_CONNECTED : SOCKET_TYPE_LISTEN);
 		s->opaque = request->opaque;
 		result->data = "start";
 		return SOCKET_OPEN;
-	} else if (s->type == SOCKET_TYPE_CONNECTED) {
+	} else if (type == SOCKET_TYPE_CONNECTED) {
 		// todo: maybe we should send a message SOCKET_TRANSFER to s->opaque
 		s->opaque = request->opaque;
 		result->data = "transfer";
 		return SOCKET_OPEN;
 	}
-	// if s->type == SOCKET_TYPE_HALFCLOSE , SOCKET_CLOSE message will send later
+	// if s->type == SOCKET_TYPE_HALFCLOSE_* , SOCKET_CLOSE message will send later
 	return -1;
 }
 
@@ -1141,7 +1167,7 @@ static int
 pause_socket(struct socket_server *ss, struct request_resumepause *request, struct socket_message *result) {
 	int id = request->id;
 	struct socket *s = &ss->slot[HASH_ID(id)];
-	if (s->type == SOCKET_TYPE_INVALID || s->id !=id) {
+	if (socket_invalid(s, id)) {
 		return -1;
 	}
 	if (enable_read(ss, s, false)) {
@@ -1158,7 +1184,7 @@ static void
 setopt_socket(struct socket_server *ss, struct request_setopt *request) {
 	int id = request->id;
 	struct socket *s = &ss->slot[HASH_ID(id)];
-	if (s->type == SOCKET_TYPE_INVALID || s->id !=id) {
+	if (socket_invalid(s, id)) {
 		return;
 	}
 	int v = request->value;
@@ -1210,7 +1236,7 @@ add_udp_socket(struct socket_server *ss, struct request_udp *udp) {
 		ss->slot[HASH_ID(id)].type = SOCKET_TYPE_INVALID;
 		return;
 	}
-	ns->type = SOCKET_TYPE_CONNECTED;
+	ATOM_STORE(&ns->type , SOCKET_TYPE_CONNECTED);
 	memset(ns->p.udp_address, 0, sizeof(ns->p.udp_address));
 }
 
@@ -1218,7 +1244,7 @@ static int
 set_udp_address(struct socket_server *ss, struct request_setudp *request, struct socket_message *result) {
 	int id = request->id;
 	struct socket *s = &ss->slot[HASH_ID(id)];
-	if (s->type == SOCKET_TYPE_INVALID || s->id !=id) {
+	if (socket_invalid(s, id)) {
 		return -1;
 	}
 	int type = request->address[0];
@@ -1236,7 +1262,7 @@ set_udp_address(struct socket_server *ss, struct request_setudp *request, struct
 	} else {
 		memcpy(s->p.udp_address, request->address, 1+2+16);	// 1 type, 2 port, 16 ipv6
 	}
-	ATOM_DEC(&s->udpconnecting);
+	ATOM_FDEC(&s->udpconnecting);
 	return -1;
 }
 
@@ -1245,7 +1271,7 @@ inc_sending_ref(struct socket *s, int id) {
 	if (s->protocol != PROTOCOL_TCP)
 		return;
 	for (;;) {
-		uint32_t sending = s->sending;
+		unsigned long sending = ATOM_LOAD(&s->sending);
 		if ((sending >> 16) == ID_TAG16(id)) {
 			if ((sending & 0xffff) == 0xffff) {
 				// s->sending may overflow (rarely), so busy waiting here for socket thread dec it. see issue #794
@@ -1267,8 +1293,8 @@ dec_sending_ref(struct socket_server *ss, int id) {
 	struct socket * s = &ss->slot[HASH_ID(id)];
 	// Notice: udp may inc sending while type == SOCKET_TYPE_RESERVE
 	if (s->id == id && s->protocol == PROTOCOL_TCP) {
-		assert((s->sending & 0xffff) != 0);
-		ATOM_DEC(&s->sending);
+		assert((ATOM_LOAD(&s->sending) & 0xffff) != 0);
+		ATOM_FDEC(&s->sending);
 	}
 }
 
@@ -1357,11 +1383,16 @@ forward_message_tcp(struct socket_server *ss, struct socket *s, struct socket_lo
 	}
 	if (n==0) {
 		FREE(buffer);
-		force_close(ss, s, l, result);
+		if (nomore_sending_data(s)) {
+			force_close(ss,s,l,result); 
+		} else { 
+			ATOM_STORE(&s->type , SOCKET_TYPE_HALFCLOSE_READ);
+			shutdown(s->fd, SHUT_RD);
+		}
 		return SOCKET_CLOSE;
 	}
 
-	if (s->type == SOCKET_TYPE_HALFCLOSE) {
+	if (ATOM_LOAD(&s->type) == SOCKET_TYPE_HALFCLOSE_READ) {
 		// discard recv data
 		FREE(buffer);
 		return -1;
@@ -1455,7 +1486,7 @@ report_connect(struct socket_server *ss, struct socket *s, struct socket_lock *l
 			result->data = strerror(errno);
 		return SOCKET_ERR;
 	} else {
-		s->type = SOCKET_TYPE_CONNECTED;
+		ATOM_STORE(&s->type , SOCKET_TYPE_CONNECTED);
 		result->opaque = s->opaque;
 		result->id = s->id;
 		result->ud = 0;
@@ -1526,7 +1557,7 @@ report_accept(struct socket_server *ss, struct socket *s, struct socket_message 
 	// accept new one connection
 	stat_read(ss,s,1);
 
-	ns->type = SOCKET_TYPE_PACCEPT;
+	ATOM_STORE(&ns->type , SOCKET_TYPE_PACCEPT);
 	result->opaque = s->opaque;
 	result->id = s->id;
 	result->ud = id;
@@ -1548,7 +1579,7 @@ clear_closed_event(struct socket_server *ss, struct socket_message * result, int
 			struct event *e = &ss->ev[i];
 			struct socket *s = e->s;
 			if (s) {
-				if (s->type == SOCKET_TYPE_INVALID && s->id == id) {
+				if (socket_invalid(s, id)) {
 					e->s = NULL;
 					break;
 				}
@@ -1596,7 +1627,7 @@ socket_server_poll(struct socket_server *ss, struct socket_message * result, int
 		}
 		struct socket_lock l;
 		socket_lock_init(s, &l);
-		switch (s->type) {
+		switch (ATOM_LOAD(&s->type)) {
 		case SOCKET_TYPE_CONNECTING:
 			return report_connect(ss, s, &l, result);
 		case SOCKET_TYPE_LISTEN: {
@@ -1714,7 +1745,7 @@ socket_server_connect(struct socket_server *ss, uintptr_t opaque, const char * a
 
 static inline int
 can_direct_write(struct socket *s, int id) {
-	return s->id == id && nomore_sending_data(s) && s->type == SOCKET_TYPE_CONNECTED && s->udpconnecting == 0;
+	return s->id == id && nomore_sending_data(s) && ATOM_LOAD(&s->type) == SOCKET_TYPE_CONNECTED && ATOM_LOAD(&s->udpconnecting) == 0;
 }
 
 // return -1 when error, 0 when success
@@ -1722,7 +1753,7 @@ int
 socket_server_send(struct socket_server *ss, struct socket_sendbuffer *buf) {
 	int id = buf->id;
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	if (s->id != id || s->type == SOCKET_TYPE_INVALID) {
+	if (socket_invalid(s, id) || s->closing) {
 		free_buffer(ss, buf);
 		return -1;
 	}
@@ -1798,7 +1829,7 @@ socket_server_send_lowpriority(struct socket_server *ss, struct socket_sendbuffe
 	int id = buf->id;
 
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	if (s->id != id || s->type == SOCKET_TYPE_INVALID) {
+	if (socket_invalid(s, id)) {
 		free_buffer(ss, buf);
 		return -1;
 	}
@@ -2003,7 +2034,7 @@ int
 socket_server_udp_send(struct socket_server *ss, const struct socket_udp_address *addr, struct socket_sendbuffer *buf) {
 	int id = buf->id;
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	if (s->id != id || s->type == SOCKET_TYPE_INVALID) {
+	if (socket_invalid(s, id)) {
 		free_buffer(ss, buf);
 		return -1;
 	}
@@ -2064,17 +2095,17 @@ socket_server_udp_send(struct socket_server *ss, const struct socket_udp_address
 int
 socket_server_udp_connect(struct socket_server *ss, int id, const char * addr, int port) {
 	struct socket * s = &ss->slot[HASH_ID(id)];
-	if (s->id != id || s->type == SOCKET_TYPE_INVALID) {
+	if (socket_invalid(s, id)) {
 		return -1;
 	}
 	struct socket_lock l;
 	socket_lock_init(s, &l);
 	socket_lock(&l);
-	if (s->id != id || s->type == SOCKET_TYPE_INVALID) {
+	if (socket_invalid(s, id)) {
 		socket_unlock(&l);
 		return -1;
 	}
-	ATOM_INC(&s->udpconnecting);
+	ATOM_FINC(&s->udpconnecting);
 	socket_unlock(&l);
 
 	int status;
@@ -2152,7 +2183,8 @@ static int
 query_info(struct socket *s, struct socket_info *si) {
 	union sockaddr_all u;
 	socklen_t slen = sizeof(u);
-	switch (s->type) {
+	int closing = 0;
+	switch (ATOM_LOAD(&s->type)) {
 	case SOCKET_TYPE_BIND:
 		si->type = SOCKET_INFO_BIND;
 		si->name[0] = '\0';
@@ -2163,9 +2195,12 @@ query_info(struct socket *s, struct socket_info *si) {
 			getname(&u, si->name, sizeof(si->name));
 		}
 		break;
+	case SOCKET_TYPE_HALFCLOSE_READ:
+	case SOCKET_TYPE_HALFCLOSE_WRITE:
+		closing = 1;
 	case SOCKET_TYPE_CONNECTED:
 		if (s->protocol == PROTOCOL_TCP) {
-			si->type = SOCKET_INFO_TCP;
+			si->type = closing ? SOCKET_INFO_CLOSING : SOCKET_INFO_TCP;
 			if (getpeername(s->fd, &u.s, &slen) == 0) {
 				getname(&u, si->name, sizeof(si->name));
 			}
