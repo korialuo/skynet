@@ -118,10 +118,14 @@ end
 socket_message[3] = function(id)
 	local s = socket_pool[id]
 	if s == nil then
+		driver.close(id)
 		return
 	end
 	s.connected = false
 	wakeup(s)
+	if s.on_close then
+		s.on_close(id)
+	end
 end
 
 -- SKYNET_SOCKET_TYPE_ACCEPT = 4
@@ -138,6 +142,7 @@ end
 socket_message[5] = function(id, _, err)
 	local s = socket_pool[id]
 	if s == nil then
+		driver.shutdown(id)
 		skynet.error("socket: error on unknown", id, err)
 		return
 	end
@@ -269,8 +274,8 @@ function socket.close(id)
 	if s == nil then
 		return
 	end
+	driver.close(id)
 	if s.connected then
-		driver.close(id)
 		if s.co then
 			-- reading this socket on another coroutine, so don't shutdown (clear the buffer) immediately
 			-- wait reading coroutine read the buffer.
@@ -481,6 +486,12 @@ function socket.warning(id, callback)
 	local obj = socket_pool[id]
 	assert(obj)
 	obj.on_warning = callback
+end
+
+function socket.onclose(id, callback)
+	local obj = socket_pool[id]
+	assert(obj)
+	obj.on_close = callback
 end
 
 return socket

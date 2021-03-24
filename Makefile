@@ -141,7 +141,8 @@ $(LUA_CLIB_PATH)/extlib.so : $(addprefix lualib-src/,$(LUA_CLIB_EXTLIB)) | $(LUA
 
 
 clean :
-	rm -f $(SKYNET_BUILD_PATH)/skynet $(CSERVICE_PATH)/*.so $(LUA_CLIB_PATH)/*.so
+	rm -f $(SKYNET_BUILD_PATH)/skynet $(CSERVICE_PATH)/*.so $(LUA_CLIB_PATH)/*.so && \
+  rm -rf $(SKYNET_BUILD_PATH)/*.dSYM $(CSERVICE_PATH)/*.dSYM $(LUA_CLIB_PATH)/*.dSYM
 
 cleanall: clean
 ifneq (,$(wildcard 3rd/jemalloc/Makefile))
