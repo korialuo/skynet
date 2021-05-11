@@ -678,6 +678,15 @@ _failed_getaddrinfo:
 }
 
 static int
+report_error(struct socket *s, struct socket_message *result, const char *err) {
+	result->id = s->id;
+	result->ud = 0;
+	result->opaque = s->opaque;
+	result->data = (char *)err;
+	return SOCKET_ERR;
+}
+
+static int
 close_write(struct socket_server *ss, struct socket *s, struct socket_lock *l, struct socket_message *result) {
 	if (s->closing) {
 		force_close(ss,s,l,result);
@@ -696,11 +705,7 @@ close_write(struct socket_server *ss, struct socket *s, struct socket_lock *l, s
 		ATOM_STORE(&s->type, SOCKET_TYPE_HALFCLOSE_WRITE);
 		shutdown(s->fd, SHUT_WR);
 		enable_write(ss, s, false);
-		result->id = s->id;
-		result->ud = 0;
-		result->opaque = s->opaque;
-		result->data = strerror(errno);
-		return SOCKET_ERR;
+		return report_error(s, result, strerror(errno));
 	}
 }
 
@@ -894,11 +899,7 @@ send_buffer_(struct socket_server *ss, struct socket *s, struct socket_lock *l, 
 		int err = enable_write(ss, s, false);
 
 		if (err) {
-			result->opaque = s->opaque;
-			result->id = s->id;
-			result->ud = 0;
-			result->data = "disable write failed";
-			return SOCKET_ERR;
+			return report_error(s, result, "disable write failed");
 		}
 
 		if(s->warn_size > 0){
@@ -989,11 +990,7 @@ trigger_write(struct socket_server *ss, struct request_send * request, struct so
 	if (socket_invalid(s, id))
 		return -1;
 	if (enable_write(ss, s, true)) {
-		result->opaque = s->opaque;
-		result->id = s->id;
-		result->ud = 0;
-		result->data = "enable write failed";
-		return SOCKET_ERR;
+		return report_error(s, result, "enable write failed");
 	}
 	return -1;
 }
@@ -1050,11 +1047,7 @@ send_socket(struct socket_server *ss, struct request_send * request, struct sock
 			}
 		}
 		if (enable_write(ss, s, true)) {
-			result->opaque = s->opaque;
-			result->id = s->id;
-			result->ud = 0;
-			result->data = "enable write failed";
-			return SOCKET_ERR;
+			return report_error(s, result, "enable write failed");
 		}
 	} else {
 		if (s->protocol == PROTOCOL_TCP) {
@@ -1188,8 +1181,11 @@ resume_socket(struct socket_server *ss, struct request_resumepause *request, str
 		result->data = "invalid socket";
 		return SOCKET_ERR;
 	}
-	if (halfclose_read(s))
-		return -1;
+	if (halfclose_read(s)) {
+		// The closing socket may be in transit, so raise an error. See https://github.com/cloudwu/skynet/issues/1374
+		result->data = "socket closed";
+		return SOCKET_ERR;
+	}
 	struct socket_lock l;
 	socket_lock_init(s, &l);
 	if (enable_read(ss, s, true)) {
@@ -1208,7 +1204,7 @@ resume_socket(struct socket_server *ss, struct request_resumepause *request, str
 		result->data = "transfer";
 		return SOCKET_OPEN;
 	}
-	// if s->type == SOCKET_TYPE_HALFCLOSE_* , SOCKET_CLOSE message will send later
+	// if s->type == SOCKET_TYPE_HALFCLOSE_WRITE , SOCKET_CLOSE message will send later
 	return -1;
 }
 
@@ -1220,11 +1216,7 @@ pause_socket(struct socket_server *ss, struct request_resumepause *request, stru
 		return -1;
 	}
 	if (enable_read(ss, s, false)) {
-		result->id = id;
-		result->opaque = request->opaque;
-		result->ud = 0;
-		result->data = "enable read failed";
-		return SOCKET_ERR;
+		return report_error(s, result, "enable read failed");
 	}
 	return -1;
 }
@@ -1299,12 +1291,7 @@ set_udp_address(struct socket_server *ss, struct request_setudp *request, struct
 	int type = request->address[0];
 	if (type != s->protocol) {
 		// protocol mismatch
-		result->opaque = s->opaque;
-		result->id = s->id;
-		result->ud = 0;
-		result->data = "protocol mismatch";
-
-		return SOCKET_ERR;
+		return report_error(s, result, "protocol mismatch");
 	}
 	if (type == PROTOCOL_UDP) {
 		memcpy(s->p.udp_address, request->address, 1+2+4);	// 1 type, 2 port, 4 ipv4
@@ -1421,10 +1408,7 @@ forward_message_tcp(struct socket_server *ss, struct socket *s, struct socket_lo
 		case AGAIN_WOULDBLOCK:
 			break;
 		default:
-			// close when error
-			force_close(ss, s, l, result);
-			result->data = strerror(errno);
-			return SOCKET_ERR;
+			return report_error(s, result, strerror(errno));
 		}
 		return -1;
 	}
@@ -1674,10 +1658,11 @@ socket_server_poll(struct socket_server *ss, struct socket_message * result, int
 			ss->event_index = 0;
 			if (ss->event_n <= 0) {
 				ss->event_n = 0;
-				if (errno == EINTR) {
-					continue;
+				int err = errno;
+				if (err != EINTR) {
+					skynet_error(NULL, "socket-server: %s", strerror(err));
 				}
-				return -1;
+				continue;
 			}
 		}
 		struct event *e = &ss->ev[ss->event_index++];
@@ -1737,7 +1722,6 @@ socket_server_poll(struct socket_server *ss, struct socket_message * result, int
 				return type;
 			}
 			if (e->error) {
-				// close when error
 				int error;
 				socklen_t len = sizeof(error);  
 				int code = getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &error, &len);  
@@ -1749,18 +1733,14 @@ socket_server_poll(struct socket_server *ss, struct socket_message * result, int
 				} else {
 					err = "Unknown error";
 				}
-				force_close(ss, s, &l, result);
-				result->data = (char *)err;
-				return SOCKET_ERR;
+				return report_error(s, result, err);
 			}
-			if(e->eof) {
+			if (e->eof) {
 				// For epoll (at least), FIN packets are exchanged both ways.
 				// See: https://stackoverflow.com/questions/52976152/tcp-when-is-epollhup-generated
+				int halfclose = halfclose_read(s);
 				force_close(ss, s, &l, result);
-				if (halfclose_read(s)) {
-					// Already rasied SOCKET_CLOSE
-					return -1;
-				} else {
+				if (!halfclose) {
 					return SOCKET_CLOSE;
 				}
 			}
