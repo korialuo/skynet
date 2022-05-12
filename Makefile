@@ -19,16 +19,23 @@ $(LUA_STATICLIB) :
 
 # https : turn on TLS_MODULE to add https support
 
+# openssl 1.1
+
+OPENSSL11_LIBDIR    := 3rd/openssl
+OPENSSL11_STATICLIB := 3rd/openssl/libcrypto.a 3rd/openssl/libssl.a
+OPENSSL11_INC       := 3rd/openssl/include
+
 # TLS_MODULE=ltls
-TLS_LIB=
-TLS_INC=
+TLS_LIB := $(OPENSSL11_LIBDIR)
+TLS_INC := $(OPENSSL11_INC)
 
 # jemalloc
 
 JEMALLOC_STATICLIB := 3rd/jemalloc/lib/libjemalloc_pic.a
 JEMALLOC_INC := 3rd/jemalloc/include/jemalloc
 
-all : jemalloc
+
+all : jemalloc openssl
 	
 .PHONY : jemalloc update3rd
 
@@ -45,8 +52,20 @@ $(JEMALLOC_STATICLIB) : 3rd/jemalloc/Makefile
 
 jemalloc : $(MALLOC_STATICLIB)
 
+
+$(OPENSSL11_STATICLIB) : 3rd/openssl/Makefile
+	cd 3rd/openssl && $(MAKE) CC=$(CC)
+
+3rd/openssl/config :
+	git submodule update --init
+
+3rd/openssl/Makefile : | 3rd/openssl/config
+	cd 3rd/openssl && ./config no-asm no-shared
+
+openssl : $(OPENSSL11_STATICLIB)
+
 rm3rd :
-	rm -rf 3rd/jemalloc 3rd/lua-cjson 3rd/kcp
+	rm -rf 3rd/jemalloc 3rd/lua-cjson 3rd/kcp 3rd/openssl
 
 update3rd : rm3rd
 	git submodule update --init
@@ -110,7 +129,7 @@ endef
 $(foreach v, $(CSERVICE), $(eval $(call CSERVICE_TEMP,$(v))))
 
 $(LUA_CLIB_PATH)/skynet.so : $(addprefix lualib-src/,$(LUA_CLIB_SKYNET)) | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualibssl -lcrypto
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualibssl -I$(OPENSSL11_INC) -L$(OPENSSL11_LIBDIR) -lcrypto
 
 $(LUA_CLIB_PATH)/bson.so : lualib-src/lua-bson.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -Iskynet-src $^ -o $@
@@ -119,7 +138,7 @@ $(LUA_CLIB_PATH)/md5.so : 3rd/lua-md5/md5.c 3rd/lua-md5/md5lib.c 3rd/lua-md5/com
 	$(CC) $(CFLAGS) $(SHARED) -I3rd/lua-md5 $^ -o $@ 
 
 $(LUA_CLIB_PATH)/client.so : lualib-src/lua-clientsocket.c lualib-src/lua-crypt.c lualib-src/lsha1.c | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -lpthread
+	$(CC) $(CFLAGS) $(SHARED) -I$(OPENSSL11_INC) -L$(OPENSSL11_LIBDIR)  $^ -o $@ -lpthread
 
 $(LUA_CLIB_PATH)/sproto.so : lualib-src/sproto/sproto.c lualib-src/sproto/lsproto.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -Ilualib-src/sproto $^ -o $@ 
