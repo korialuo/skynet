@@ -60,7 +60,7 @@ $(OPENSSL11_STATICLIB) : 3rd/openssl/Makefile
 	git submodule update --init
 
 3rd/openssl/Makefile : | 3rd/openssl/config
-	cd 3rd/openssl && ./config no-asm no-shared
+	cd 3rd/openssl && ./config no-asm no-shared no-dso no-tests
 
 openssl : $(OPENSSL11_STATICLIB)
 
@@ -166,6 +166,9 @@ clean :
 cleanall: clean
 ifneq (,$(wildcard 3rd/jemalloc/Makefile))
 	cd 3rd/jemalloc && $(MAKE) clean && rm Makefile
+endif
+ifneq (,$(wildcard 3rd/openssl/Makefile))
+	cd 3rd/openssl && $(MAKE) distclean
 endif
 	cd 3rd/lua && $(MAKE) clean
 	rm -f $(LUA_STATICLIB)
