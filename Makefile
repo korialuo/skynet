@@ -17,15 +17,15 @@ LUA_INC ?= 3rd/lua
 $(LUA_STATICLIB) :
 	cd 3rd/lua && $(MAKE) CC='$(CC) -std=gnu99' $(PLAT)
 
-# https : turn on TLS_MODULE to add https support
-
-# openssl 1.1
+# openssl
 
 OPENSSL11_LIBDIR    := 3rd/openssl
 OPENSSL11_STATICLIB := 3rd/openssl/libcrypto.a 3rd/openssl/libssl.a
 OPENSSL11_INC       := 3rd/openssl/include
 
-# TLS_MODULE=ltls
+# TLS
+
+TLS_MODULE = ltls
 TLS_LIB := $(OPENSSL11_LIBDIR)
 TLS_INC := $(OPENSSL11_INC)
 
