@@ -65,7 +65,7 @@ $(OPENSSL11_STATICLIB) : 3rd/openssl/Makefile
 openssl : $(OPENSSL11_STATICLIB)
 
 rm3rd :
-	rm -rf 3rd/jemalloc 3rd/lua-cjson 3rd/kcp 3rd/openssl
+	rm -rf 3rd/jemalloc 3rd/kcp 3rd/openssl
 
 update3rd : rm3rd
 	git submodule update --init
@@ -76,7 +76,7 @@ CSERVICE = snlua logger gate harbor
 LUA_CLIB = skynet \
   client \
   bson md5 sproto lpeg \
-  cjson lkcp extlib $(TLS_MODULE)
+  lkcp extlib $(TLS_MODULE)
 
 LUA_CLIB_SKYNET = \
   lua-skynet.c lua-seri.c \
@@ -148,9 +148,6 @@ $(LUA_CLIB_PATH)/ltls.so : lualib-src/ltls.c | $(LUA_CLIB_PATH)
 
 $(LUA_CLIB_PATH)/lpeg.so : 3rd/lpeg/lpcap.c 3rd/lpeg/lpcode.c 3rd/lpeg/lpprint.c 3rd/lpeg/lptree.c 3rd/lpeg/lpvm.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -I3rd/lpeg $^ -o $@ 
-
-$(LUA_CLIB_PATH)/cjson.so : 3rd/lua-cjson/fpconv.c 3rd/lua-cjson/strbuf.c 3rd/lua-cjson/lua_cjson.c | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -I3rd/lua-cjson
 
 $(LUA_CLIB_PATH)/lkcp.so : 3rd/kcp/ikcp.c lualib-src/lua-kcp.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -I3rd/kcp
