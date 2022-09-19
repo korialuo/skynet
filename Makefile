@@ -19,14 +19,14 @@ $(LUA_STATICLIB) :
 
 # openssl
 
-OPENSSL11_LIBDIR    := 3rd/openssl
+OPENSSL11_LIB       := 3rd/openssl
 OPENSSL11_STATICLIB := 3rd/openssl/libcrypto.a 3rd/openssl/libssl.a
 OPENSSL11_INC       := 3rd/openssl/include
 
 # TLS
 
 TLS_MODULE = ltls
-TLS_LIB := $(OPENSSL11_LIBDIR)
+TLS_LIB := $(OPENSSL11_LIB)
 TLS_INC := $(OPENSSL11_INC)
 
 # jemalloc
@@ -60,7 +60,7 @@ $(OPENSSL11_STATICLIB) : 3rd/openssl/Makefile
 	git submodule update --init
 
 3rd/openssl/Makefile : | 3rd/openssl/config
-	cd 3rd/openssl && ./config no-asm no-shared no-dso no-tests
+	cd 3rd/openssl && ./config no-asm no-dso no-tests
 
 openssl : $(OPENSSL11_STATICLIB)
 
@@ -129,7 +129,7 @@ endef
 $(foreach v, $(CSERVICE), $(eval $(call CSERVICE_TEMP,$(v))))
 
 $(LUA_CLIB_PATH)/skynet.so : $(addprefix lualib-src/,$(LUA_CLIB_SKYNET)) | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualibssl -I$(OPENSSL11_INC) -L$(OPENSSL11_LIBDIR) -lcrypto
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualibssl -I$(TLS_INC) -L$(TLS_LIB) -lcrypto
 
 $(LUA_CLIB_PATH)/bson.so : lualib-src/lua-bson.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -Iskynet-src $^ -o $@
@@ -138,7 +138,7 @@ $(LUA_CLIB_PATH)/md5.so : 3rd/lua-md5/md5.c 3rd/lua-md5/md5lib.c 3rd/lua-md5/com
 	$(CC) $(CFLAGS) $(SHARED) -I3rd/lua-md5 $^ -o $@ 
 
 $(LUA_CLIB_PATH)/client.so : lualib-src/lua-clientsocket.c lualib-src/lua-crypt.c lualib-src/lsha1.c | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) -I$(OPENSSL11_INC) -L$(OPENSSL11_LIBDIR)  $^ -o $@ -lpthread
+	$(CC) $(CFLAGS) $(SHARED) -I$(TLS_INC) -L$(TLS_LIB)  $^ -o $@ -lpthread
 
 $(LUA_CLIB_PATH)/sproto.so : lualib-src/sproto/sproto.c lualib-src/sproto/lsproto.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -Ilualib-src/sproto $^ -o $@ 
