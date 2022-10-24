@@ -72,7 +72,7 @@ lmtrandr(lua_State *L) {
 }
 
 LUAMOD_API int
-luaopen_extlib_mt19937(lua_State *L) {
+luaopen_xlib_mt19937(lua_State *L) {
     spinlock_init(&sync_policy);
     luaL_checkversion(L);
     luaL_Reg l[] = {

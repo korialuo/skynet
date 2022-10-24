@@ -106,7 +106,7 @@ lnextid(lua_State* l) {
 }
 
 LUAMOD_API int
-luaopen_extlib_snowflake(lua_State* l) {
+luaopen_xlib_snowflake(lua_State* l) {
     spinlock_init(&sync_policy);
     luaL_checkversion(l);
     luaL_Reg lib[] = {

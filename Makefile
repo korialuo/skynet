@@ -76,7 +76,7 @@ CSERVICE = snlua logger gate harbor
 LUA_CLIB = skynet \
   client \
   bson md5 sproto lpeg \
-  lkcp extlib $(TLS_MODULE)
+  lkcp xlib $(TLS_MODULE)
 
 LUA_CLIB_SKYNET = \
   lua-skynet.c lua-seri.c \
@@ -94,13 +94,12 @@ LUA_CLIB_SKYNET = \
   lua-datasheet.c \
   lua-sharetable.c \
 
-LUA_CLIB_EXTLIB = \
+LUA_CLIB_XLIB = \
   mt19937-64/mt19937-64.c \
   mt19937-64/lua-mt19937.c \
   skiplist/skiplist.c \
   skiplist/lua-skiplist.c \
   lua-snowflake.c \
-  \
 
 SKYNET_SRC = skynet_main.c skynet_handle.c skynet_module.c skynet_mq.c \
   skynet_server.c skynet_start.c skynet_timer.c skynet_error.c \
@@ -152,7 +151,7 @@ $(LUA_CLIB_PATH)/lpeg.so : 3rd/lpeg/lpcap.c 3rd/lpeg/lpcode.c 3rd/lpeg/lpprint.c
 $(LUA_CLIB_PATH)/lkcp.so : 3rd/kcp/ikcp.c lualib-src/lua-kcp.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -I3rd/kcp
 
-$(LUA_CLIB_PATH)/extlib.so : $(addprefix lualib-src/,$(LUA_CLIB_EXTLIB)) | $(LUA_CLIB_PATH)
+$(LUA_CLIB_PATH)/xlib.so : $(addprefix lualib-src/,$(LUA_CLIB_XLIB)) | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src
 
 

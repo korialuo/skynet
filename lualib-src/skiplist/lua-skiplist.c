@@ -181,7 +181,7 @@ _release(lua_State *L) {
 }
 
 LUAMOD_API int 
-luaopen_extlib_skiplist(lua_State *L) {
+luaopen_xlib_skiplist(lua_State *L) {
     luaL_checkversion(L);
 
     luaL_Reg l[] = {

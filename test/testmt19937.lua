@@ -1,5 +1,5 @@
 local skynet = require "skynet"
-local mt19937 = require "extlib.mt19937"
+local mt19937 = require "xlib.mt19937"
 
 
 skynet.start(function()
