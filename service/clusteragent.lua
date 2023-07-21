@@ -1,5 +1,4 @@
 local skynet = require "skynet"
-local sc = require "skynet.socketchannel"
 local socket = require "skynet.socket"
 local cluster = require "skynet.cluster.core"
 local ignoreret = skynet.ignoreret
@@ -135,7 +134,7 @@ skynet.start(function()
 
 	skynet.dispatch("lua", function(_,source, cmd, ...)
 		if cmd == "exit" then
-			socket.close(fd)
+			socket.close_fd(fd)
 			skynet.exit()
 		elseif cmd == "namechange" then
 			register_name = new_register_name()
