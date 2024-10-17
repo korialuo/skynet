@@ -60,7 +60,7 @@ $(OPENSSL11_STATICLIB) : 3rd/openssl/Makefile
 	git submodule update --init
 
 3rd/openssl/Makefile : | 3rd/openssl/config
-	cd 3rd/openssl && ./config no-asm no-dso no-tests
+	cd 3rd/openssl && ./config no-asm no-dso no-shared no-tests
 
 openssl : $(OPENSSL11_STATICLIB)
 
@@ -128,7 +128,7 @@ endef
 $(foreach v, $(CSERVICE), $(eval $(call CSERVICE_TEMP,$(v))))
 
 $(LUA_CLIB_PATH)/skynet.so : $(addprefix lualib-src/,$(LUA_CLIB_SKYNET)) | $(LUA_CLIB_PATH)
-	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualibssl -I$(TLS_INC) -L$(TLS_LIB) -lcrypto
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src -I$(TLS_INC) -L$(TLS_LIB) -lcrypto
 
 $(LUA_CLIB_PATH)/bson.so : lualib-src/lua-bson.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) -Iskynet-src $^ -o $@
