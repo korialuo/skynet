@@ -2,8 +2,12 @@ local skynet = require "skynet"
 local socket = require "http.sockethelper"
 local internal = require "http.internal"
 local dns = require "skynet.dns"
+
 local string = string
 local table = table
+local pcall = pcall
+local error = error
+local pairs = pairs
 
 local httpc = {}
 
@@ -83,15 +87,15 @@ local function connect(host, timeout)
 	end
 	-- print("protocol hostname port", protocol, hostname, port)
 	local interface = gen_interface(protocol, fd, hostname)
-	if interface.init then
-		interface.init()
-	end
 	if timeout then
 		skynet.timeout(timeout, function()
 			if not interface.finish then
 				socket.shutdown(fd)	-- shutdown the socket fd, need close later.
 			end
 		end)
+	end
+	if interface.init then
+		interface.init(host)
 	end
 	return fd, interface, host
 end
@@ -115,7 +119,7 @@ function httpc.request(method, hostname, url, recvheader, header, content)
 	if ok then
 		return statuscode, body
 	else
-		error(statuscode)
+		error(body or statuscode)
 	end
 end
 

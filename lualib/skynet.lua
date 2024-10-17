@@ -4,6 +4,7 @@ local skynet_require = require "skynet.require"
 local tostring = tostring
 local coroutine = coroutine
 local assert = assert
+local error = error
 local pairs = pairs
 local pcall = pcall
 local table = table
@@ -69,6 +70,126 @@ local watching_session = {}
 local error_queue = {}
 local fork_queue = { h = 1, t = 0 }
 
+local auxsend, auxtimeout, auxwait
+do ---- avoid session rewind conflict
+	local csend = c.send
+	local cintcommand = c.intcommand
+	local dangerzone
+	local dangerzone_size = 0x1000
+	local dangerzone_low = 0x70000000
+	local dangerzone_up	= dangerzone_low + dangerzone_size
+
+	local set_checkrewind	-- set auxsend and auxtimeout for safezone
+	local set_checkconflict -- set auxsend and auxtimeout for dangerzone
+
+	local function reset_dangerzone(session)
+		dangerzone_up = session
+		dangerzone_low = session
+		dangerzone = { [session] = true }
+		for s in pairs(session_id_coroutine) do
+			if s < dangerzone_low then
+				dangerzone_low = s
+			elseif s > dangerzone_up then
+				dangerzone_up = s
+			end
+			dangerzone[s] = true
+		end
+		dangerzone_low = dangerzone_low - dangerzone_size
+	end
+
+	-- in dangerzone, we should check if the next session already exist.
+	local function checkconflict(session)
+		if session == nil then
+			return
+		end
+		local next_session = session + 1
+		if next_session > dangerzone_up then
+			-- leave dangerzone
+			reset_dangerzone(session)
+			assert(next_session > dangerzone_up)
+			set_checkrewind()
+		else
+			while true do
+				if not dangerzone[next_session] then
+					break
+				end
+				if not session_id_coroutine[next_session] then
+					reset_dangerzone(session)
+					break
+				end
+				-- skip the session already exist.
+				next_session = c.genid() + 1
+			end
+		end
+		-- session will rewind after 0x7fffffff
+		if next_session == 0x80000000 and dangerzone[1] then
+			assert(c.genid() == 1)
+			return checkconflict(1)
+		end
+	end
+
+	local function auxsend_checkconflict(addr, proto, msg, sz)
+		local session = csend(addr, proto, nil, msg, sz)
+		checkconflict(session)
+		return session
+	end
+
+	local function auxtimeout_checkconflict(timeout)
+		local session = cintcommand("TIMEOUT", timeout)
+		checkconflict(session)
+		return session
+	end
+
+	local function auxwait_checkconflict()
+		local session = c.genid()
+		checkconflict(session)
+		return session
+	end
+
+	local function auxsend_checkrewind(addr, proto, msg, sz)
+		local session = csend(addr, proto, nil, msg, sz)
+		if session and session > dangerzone_low and session <= dangerzone_up then
+			-- enter dangerzone
+			set_checkconflict(session)
+		end
+		return session
+	end
+
+	local function auxtimeout_checkrewind(timeout)
+		local session = cintcommand("TIMEOUT", timeout)
+		if session and session > dangerzone_low and session <= dangerzone_up then
+			-- enter dangerzone
+			set_checkconflict(session)
+		end
+		return session
+	end
+
+	local function auxwait_checkrewind()
+		local session = c.genid()
+		if session > dangerzone_low and session <= dangerzone_up then
+			-- enter dangerzone
+			set_checkconflict(session)
+		end
+		return session
+	end
+
+	set_checkrewind = function()
+		auxsend = auxsend_checkrewind
+		auxtimeout = auxtimeout_checkrewind
+		auxwait = auxwait_checkrewind
+	end
+
+	set_checkconflict = function(session)
+		reset_dangerzone(session)
+		auxsend = auxsend_checkconflict
+		auxtimeout = auxtimeout_checkconflict
+		auxwait = auxwait_checkconflict
+	end
+
+	-- in safezone at the beginning
+	set_checkrewind()
+end
+
 do ---- request/select
 	local function send_requests(self)
 		local sessions = {}
@@ -85,7 +206,7 @@ do ---- request/select
 				c.trace(tag, "call", 4)
 				c.send(addr, skynet.PTYPE_TRACE, 0, tag)
 			end
-			local session = c.send(addr, p.id , nil , p.pack(tunpack(req, 3, req.n)))
+			local session = auxsend(addr, p.id , p.pack(tunpack(req, 3, req.n)))
 			if session == nil then
 				err = err or {}
 				err[#err+1] = req
@@ -188,7 +309,7 @@ do ---- request/select
 		self._error = send_requests(self)
 		self._resp = {}
 		if timeout then
-			self._timeout = c.intcommand("TIMEOUT",timeout)
+			self._timeout = auxtimeout(timeout)
 			session_id_coroutine[self._timeout] = self._thread
 		end
 
@@ -373,7 +494,7 @@ end
 skynet.trace_timeout(false)	-- turn off by default
 
 function skynet.timeout(ti, func)
-	local session = c.intcommand("TIMEOUT",ti)
+	local session = auxtimeout(ti)
 	assert(session)
 	local co = co_create_for_timeout(func, ti)
 	assert(session_id_coroutine[session] == nil)
@@ -392,7 +513,7 @@ local function suspend_sleep(session, token)
 end
 
 function skynet.sleep(ti, token)
-	local session = c.intcommand("TIMEOUT",ti)
+	local session = auxtimeout(ti)
 	assert(session)
 	token = token or coroutine.running()
 	local succ, ret = suspend_sleep(session, token)
@@ -412,7 +533,7 @@ function skynet.yield()
 end
 
 function skynet.wait(token)
-	local session = c.genid()
+	local session = auxwait()
 	token = token or coroutine.running()
 	suspend_sleep(session, token)
 	sleep_session[token] = nil
@@ -455,7 +576,10 @@ function skynet.killthread(thread)
 	if addr then
 		session_coroutine_address[co] = nil
 		session_coroutine_tracetag[co] = nil
-		c.send(addr, skynet.PTYPE_ERROR, session_coroutine_id[co], "")
+		local session = session_coroutine_id[co]
+		if session > 0 then
+			c.send(addr, skynet.PTYPE_ERROR, session, "")
+		end
 		session_coroutine_id[co] = nil
 	end
 	if watching_session[session] then
@@ -546,7 +670,11 @@ function skynet.exit()
 	for address in pairs(tmp) do
 		c.send(address, skynet.PTYPE_ERROR, 0, "")
 	end
-	c.callback(function() end)
+	c.callback(function(prototype, msg, sz, session, source)
+		if session ~= 0 and source ~= 0 then
+			c.send(source, skynet.PTYPE_ERROR, session, "")
+		end
+	end)
 	c.command("EXIT")
 	-- quit service
 	coroutine_yield "QUIT"
@@ -602,7 +730,7 @@ function skynet.call(addr, typename, ...)
 	end
 
 	local p = proto[typename]
-	local session = c.send(addr, p.id , nil , p.pack(...))
+	local session = auxsend(addr, p.id , p.pack(...))
 	if session == nil then
 		error("call to invalid address " .. skynet.address(addr))
 	end
@@ -616,7 +744,7 @@ function skynet.rawcall(addr, typename, msg, sz)
 		c.send(addr, skynet.PTYPE_TRACE, 0, tag)
 	end
 	local p = proto[typename]
-	local session = assert(c.send(addr, p.id , nil , msg, sz), "call to invalid address")
+	local session = assert(auxsend(addr, p.id , msg, sz), "call to invalid address")
 	return yield_call(addr, session)
 end
 
@@ -624,7 +752,7 @@ function skynet.tracecall(tag, addr, typename, msg, sz)
 	c.trace(tag, "tracecall begin")
 	c.send(addr, skynet.PTYPE_TRACE, 0, tag)
 	local p = proto[typename]
-	local session = assert(c.send(addr, p.id , nil , msg, sz), "call to invalid address")
+	local session = assert(auxsend(addr, p.id , msg, sz), "call to invalid address")
 	local msg, sz = yield_call(addr, session)
 	c.trace(tag, "tracecall end")
 	return msg, sz
@@ -966,10 +1094,20 @@ function skynet.stat(what)
 	return c.intcommand("STAT", what)
 end
 
+local function task_traceback(co)
+	if co == "BREAK" then
+		return co
+	elseif timeout_traceback and timeout_traceback[co] then
+		return timeout_traceback[co]
+	else
+		return traceback(co)
+	end
+end
+
 function skynet.task(ret)
 	if ret == nil then
 		local t = 0
-		for session,co in pairs(session_id_coroutine) do
+		for _,co in pairs(session_id_coroutine) do
 			if co ~= "BREAK" then
 				t = t + 1
 			end
@@ -987,23 +1125,13 @@ function skynet.task(ret)
 	if tt == "table" then
 		for session,co in pairs(session_id_coroutine) do
 			local key = string.format("%s session: %d", tostring(co), session)
-			if co == "BREAK" then
-				ret[key] = "BREAK"
-			elseif timeout_traceback and timeout_traceback[co] then
-				ret[key] = timeout_traceback[co]
-			else
-				ret[key] = traceback(co)
-			end
+			ret[key] = task_traceback(co)
 		end
 		return
 	elseif tt == "number" then
 		local co = session_id_coroutine[ret]
 		if co then
-			if co == "BREAK" then
-				return "BREAK"
-			else
-				return traceback(co)
-			end
+			return task_traceback(co)
 		else
 			return "No session"
 		end
@@ -1020,7 +1148,7 @@ end
 function skynet.uniqtask()
 	local stacks = {}
 	for session, co in pairs(session_id_coroutine) do
-		local stack = traceback(co)
+		local stack = task_traceback(co)
 		local info = stacks[stack] or {count = 0, sessions = {}}
 		info.count = info.count + 1
 		if info.count < 10 then

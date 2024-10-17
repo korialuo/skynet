@@ -1,7 +1,5 @@
-local skynet = require "skynet"
-local harbor = require "skynet.harbor"
 local service = require "skynet.service"
-require "skynet.manager"	-- import skynet.launch, ...
+local skynet = require "skynet.manager"	-- import skynet.launch, ...
 
 skynet.start(function()
 	local standalone = skynet.getenv "standalone"
@@ -42,7 +40,7 @@ skynet.start(function()
 	skynet.newservice "service_mgr"
 
 	local enablessl = skynet.getenv "enablessl"
-	if enablessl then
+	if enablessl == "true" then
 		service.new("ltls_holder", function ()
 			local c = require "ltls.init.c"
 			c.constructor()

@@ -35,18 +35,18 @@ static void
 _init_bio(lua_State* L, struct tls_context* tls_p, struct ssl_ctx* ctx_p) {
     tls_p->ssl = SSL_new(ctx_p->ctx);
     if(!tls_p->ssl) {
-        luaL_error(L, "SSL_new faild");
+        luaL_error(L, "SSL_new failed");
     }
 
     tls_p->in_bio = BIO_new(BIO_s_mem());
     if(!tls_p->in_bio) {
-        luaL_error(L, "new in bio faild");
+        luaL_error(L, "new in bio failed");
     }
     BIO_set_mem_eof_return(tls_p->in_bio, -1); /* see: https://www.openssl.org/docs/crypto/BIO_s_mem.html */
 
     tls_p->out_bio = BIO_new(BIO_s_mem());
     if(!tls_p->out_bio) {
-        luaL_error(L, "new out bio faild");
+        luaL_error(L, "new out bio failed");
     }
     BIO_set_mem_eof_return(tls_p->out_bio, -1); /* see: https://www.openssl.org/docs/crypto/BIO_s_mem.html */
 
@@ -267,6 +267,15 @@ _ltls_context_write(lua_State* L) {
     return 1;
 }
 
+static int
+_lset_ext_host_name(lua_State* L) {
+    struct tls_context* tls_p = _check_context(L, 1);
+    size_t slen = 0;
+    char* host = (char*)lua_tolstring(L, 2, &slen);
+    int ret = SSL_set_tlsext_host_name(tls_p->ssl, host);
+    lua_pushinteger(L, ret);
+    return 1;
+}
 
 static int
 _lctx_gc(lua_State* L) {
@@ -330,7 +339,7 @@ lnew_ctx(lua_State* L) {
         unsigned int err = ERR_get_error();
         char buf[256];
         ERR_error_string_n(err, buf, sizeof(buf));
-        luaL_error(L, "SSL_CTX_new client faild. %s\n", buf);
+        luaL_error(L, "SSL_CTX_new client failed. %s\n", buf);
     }
 
     if(luaL_newmetatable(L, "_TLS_SSLCTX_METATABLE_")) {
@@ -378,6 +387,7 @@ lnew_tls(lua_State* L) {
             {"handshake", _ltls_context_handshake},
             {"read", _ltls_context_read},
             {"write", _ltls_context_write},
+            {"set_ext_host_name", _lset_ext_host_name},
             {NULL, NULL},
         };
         luaL_newlib(L, l);
@@ -411,7 +421,9 @@ ltls_init_constructor(lua_State* L) {
     if(!TLS_IS_INIT) {
         SSL_library_init();
         SSL_load_error_strings();
+#if OPENSSL_VERSION_NUMBER < 0x30000000L
         ERR_load_BIO_strings();
+#endif
         OpenSSL_add_all_algorithms();
     }
 #endif

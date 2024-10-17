@@ -14,6 +14,7 @@ local pairs = pairs
 local error = error
 local string = string
 local xpcall = xpcall
+local pcall = pcall
 local debug = debug
 local table = table
 local tonumber = tonumber
@@ -33,6 +34,27 @@ local function _isws_closed(id)
     return not ws_pool[id]
 end
 
+local function reader_with_payload(self, payload)
+    local sz_payload = #payload
+    if sz_payload == 0 then
+        return
+    end
+    local read = self.read
+    function self.read (sz)
+        if sz == nil or sz == sz_payload then
+            self.read = read
+            return payload
+        end
+        if sz < sz_payload then
+            local ret = payload:sub(1, sz)
+            payload = payload:sub(sz + 1)
+            sz_payload = #payload
+            return ret
+        end
+        self.read = read
+        return payload .. read(sz - sz_payload)
+    end
+end
 
 local function write_handshake(self, host, url, header)
     local key = crypt.base64encode(crypt.randomkey()..crypt.randomkey())
@@ -50,11 +72,11 @@ local function write_handshake(self, host, url, header)
     end
 
     local recvheader = {}
-    local code, body = internal.request(self, "GET", host, url, recvheader, request_header)
+    local code, payload = internal.request(self, "GET", host, url, recvheader, request_header)
     if code ~= 101 then
-        error(string.format("websocket handshake error: code[%s] info:%s", code, body))
+        error(string.format("websocket handshake error: code[%s] info:%s", code, payload))
     end
-	assert(body == "")	-- todo: M.read may need handle it
+    reader_with_payload(self, payload)
 
     if not recvheader["upgrade"] or recvheader["upgrade"]:lower() ~= "websocket" then
         error("websocket handshake upgrade must websocket")
@@ -76,17 +98,17 @@ local function write_handshake(self, host, url, header)
     end
 end
 
-
 local function read_handshake(self, upgrade_ops)
     local header, method, url
     if upgrade_ops then
         header, method, url = upgrade_ops.header, upgrade_ops.method, upgrade_ops.url
     else
         local tmpline = {}
-        local header_body = internal.recvheader(self.read, tmpline, "")
-        if not header_body then
+        local payload = internal.recvheader(self.read, tmpline, "")
+        if not payload then
             return 413
         end
+        reader_with_payload(self, payload)
 
         local request = assert(tmpline[1])
         local httpver
@@ -460,7 +482,12 @@ function M.connect(url, header, timeout)
     local socket_id = sockethelper.connect(host_addr, host_port, timeout)
     local ws_obj = _new_client_ws(socket_id, protocol, hostname)
     ws_obj.addr = host
-    write_handshake(ws_obj, host_addr, uri, header)
+    
+    local is_ok,err = pcall(write_handshake, ws_obj, host_addr, uri, header)
+    if not is_ok then
+        _close_websocket(ws_obj)
+        error(err)
+    end
     return socket_id
 end
 
