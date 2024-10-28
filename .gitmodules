@@ -7,3 +7,6 @@
 [submodule "3rd/openssl"]
 	path = 3rd/openssl
 	url = https://github.com/openssl/openssl.git
+[submodule "3rd/lua-ksuid"]
+	path = 3rd/lua-ksuid
+	url = https://github.com/korialuo/lua-ksuid.git

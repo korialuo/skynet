@@ -65,7 +65,7 @@ $(OPENSSL11_STATICLIB) : 3rd/openssl/Makefile
 openssl : $(OPENSSL11_STATICLIB)
 
 rm3rd :
-	rm -rf 3rd/jemalloc 3rd/kcp 3rd/openssl
+	rm -rf 3rd/jemalloc 3rd/kcp 3rd/lua-ksuid 3rd/openssl
 
 update3rd : rm3rd
 	git submodule update --init
@@ -76,7 +76,7 @@ CSERVICE = snlua logger gate harbor
 LUA_CLIB = skynet \
   client \
   bson md5 sproto lpeg \
-  lkcp xlib $(TLS_MODULE)
+  lkcp lksuid xlib $(TLS_MODULE)
 
 LUA_CLIB_SKYNET = \
   lua-skynet.c lua-seri.c \
@@ -150,6 +150,9 @@ $(LUA_CLIB_PATH)/lpeg.so : 3rd/lpeg/lpcap.c 3rd/lpeg/lpcode.c 3rd/lpeg/lpprint.c
 
 $(LUA_CLIB_PATH)/lkcp.so : 3rd/kcp/ikcp.c lualib-src/lua-kcp.c | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -I3rd/kcp
+
+$(LUA_CLIB_PATH)/lksuid.so : 3rd/lua-ksuid/base62.c 3rd/lua-ksuid/csprng.c 3rd/lua-ksuid/ksuid.c 3rd/lua-ksuid/lua-ksuid.c | $(LUA_CLIB_PATH)
+	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -I3rd/lua-ksuid
 
 $(LUA_CLIB_PATH)/xlib.so : $(addprefix lualib-src/,$(LUA_CLIB_XLIB)) | $(LUA_CLIB_PATH)
 	$(CC) $(CFLAGS) $(SHARED) $^ -o $@ -Iskynet-src -Iservice-src -Ilualib-src
